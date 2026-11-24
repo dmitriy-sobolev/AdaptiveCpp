@@ -145,7 +145,8 @@ public:
                             sycl::access::target access_target)
       : _mem_region{mem_region}, _element_size{mem_region->get_element_size()},
         _mode{access_mode}, _target{access_target}, _dimensions{Dim},
-        _device_data_location{nullptr}, _bound_embedded_ptr_id{0}
+        _is_device_ptr_initialized{false}, _device_data_location{nullptr},
+        _bound_embedded_ptr_id{0}
   {
     static_assert(Dim >= 1 && Dim <=3, 
       "dimension of buffer memory requirement must be between 1 and 3");
@@ -214,7 +215,7 @@ public:
   }
 
   bool has_device_ptr() const {
-    return _device_data_location != nullptr;
+    return _is_device_ptr_initialized;
   }
 
   // Whether the requirement has been bound to an embedded_pointer uid
@@ -234,6 +235,7 @@ public:
   void initialize_device_data(void *location) {
     assert(!has_device_ptr());
     _device_data_location = location;
+    _is_device_ptr_initialized = true;
   }
 
   void* get_device_ptr() const {
@@ -321,6 +323,7 @@ private:
   sycl::access::mode _mode;
   sycl::access::target _target;
   int _dimensions;
+  bool _is_device_ptr_initialized;
 
   void* _device_data_location;
   glue::unique_id _bound_embedded_ptr_id;

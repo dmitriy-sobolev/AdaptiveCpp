@@ -501,4 +501,166 @@ BOOST_AUTO_TEST_CASE(buffer_uninitialized) {
   }
 }
 
+BOOST_AUTO_TEST_CASE(buffer_empty) {
+  namespace s = sycl;
+  s::queue q;
+
+  auto check_empty = [](const auto& buf, auto expected_range) {
+    BOOST_CHECK(buf.get_range() == expected_range);
+    BOOST_CHECK_EQUAL(buf.size(), 0);
+    BOOST_CHECK_EQUAL(buf.byte_size(), 0);
+  };
+
+  // Range-only zero-sized buffers (1D, 2D, 3D, and explicit zero page size)
+  {
+    s::buffer<int, 1> buf1d{s::range<1>{0}};
+    check_empty(buf1d, s::range<1>{0});
+    BOOST_CHECK_EQUAL(buf1d.get_count(), 0);
+    BOOST_CHECK_EQUAL(buf1d.get_size(), 0);
+
+    check_empty(s::buffer<int, 2>{s::range<2>{0, 4}}, s::range<2>{0, 4});
+    check_empty(s::buffer<int, 2>{s::range<2>{4, 0}}, s::range<2>{4, 0});
+    check_empty(s::buffer<int, 3>{s::range<3>{2, 0, 3}}, s::range<3>{2, 0, 3});
+    check_empty(
+        s::buffer<int, 1>{
+            s::range<1>{0},
+            s::property_list{
+                s::property::buffer::AdaptiveCpp_page_size<1>{s::range<1>{0}}}},
+        s::range<1>{0});
+  }
+
+  // Zero-sized nullptr constructors, plus non-zero nullptr throw/unwind safety
+  {
+    const int* cnull = nullptr;
+    check_empty(s::buffer<int, 1>{nullptr, s::range<1>{0}}, s::range<1>{0});
+    check_empty(s::buffer<int, 1>{cnull, s::range<1>{0}}, s::range<1>{0});
+    check_empty(s::buffer<const int, 1>{nullptr, s::range<1>{0}}, s::range<1>{0});
+    check_empty(
+        s::buffer<int, 1>{
+            nullptr, s::range<1>{0},
+            s::property_list{
+                s::property::buffer::AdaptiveCpp_buffer_uses_external_storage{
+                    false}}},
+        s::range<1>{0});
+    check_empty(s::buffer<int, 2>{nullptr, s::range<2>{0, 4}}, s::range<2>{0, 4});
+
+    BOOST_CHECK_THROW((s::buffer<int, 1>{nullptr, s::range<1>{4}}), s::exception);
+    BOOST_CHECK_THROW((s::buffer<int, 1>{cnull, s::range<1>{4}}), s::exception);
+  }
+
+  // Host pointers, set_final_data, containers, iterators, shared_ptr, reinterpret
+  {
+    int sentinel = 42;
+    {
+      s::buffer<int, 1> buf{&sentinel, s::range<1>{0}};
+      check_empty(buf, s::range<1>{0});
+    }
+    {
+      s::buffer<int, 1> buf{s::range<1>{0}};
+      buf.set_final_data(&sentinel);
+    }
+    BOOST_CHECK_EQUAL(sentinel, 42);
+
+    std::vector<int> empty_vec;
+    const std::vector<int> empty_cvec;
+    std::vector<bool> empty_bvec;
+    std::shared_ptr<int> empty_sp;
+    std::shared_ptr<int> sp{new int[1]{7}, std::default_delete<int[]>{}};
+
+    check_empty(s::buffer<int, 1>{empty_vec}, s::range<1>{0});
+    check_empty(s::buffer<int, 1>{empty_cvec}, s::range<1>{0});
+    check_empty(s::buffer<int, 1>{empty_vec.begin(), empty_vec.end()}, s::range<1>{0});
+    check_empty(s::buffer<bool, 1>{empty_bvec.begin(), empty_bvec.end()}, s::range<1>{0});
+    check_empty(s::buffer<int, 1>{empty_sp, s::range<1>{0}}, s::range<1>{0});
+    check_empty(s::buffer<int, 1>{sp, s::range<1>{0}}, s::range<1>{0});
+    BOOST_CHECK_EQUAL(sp.get()[0], 7);
+
+    s::buffer<int, 1> buf{nullptr, s::range<1>{0}};
+    check_empty(buf.reinterpret<std::byte, 1>(s::range<1>{0}), s::range<1>{0});
+    check_empty(buf.reinterpret<std::uint16_t>(), s::range<1>{0});
+    check_empty(buf.reinterpret<int, 2>(s::range<2>{0, 4}), s::range<2>{0, 4});
+  }
+
+  // Host accessors on empty 1D and 2D buffers
+  {
+    auto check_empty_host_acc = [](auto ha, auto expected_range) {
+      BOOST_CHECK_EQUAL(ha.size(), 0);
+      BOOST_CHECK_EQUAL(ha.byte_size(), 0);
+      BOOST_CHECK(ha.empty());
+      BOOST_CHECK(ha.get_range() == expected_range);
+      BOOST_CHECK(ha.get_pointer() == nullptr);
+      BOOST_CHECK(ha.begin() == ha.end());
+    };
+
+    s::buffer<int, 1> buf1d{nullptr, s::range<1>{0}};
+    s::buffer<int, 2> buf2d{s::range<2>{0, 4}};
+    check_empty_host_acc(buf1d.get_host_access(), s::range<1>{0});
+    check_empty_host_acc(buf2d.get_host_access(s::read_only), s::range<2>{0, 4});
+  }
+
+  // Device accessors, kernels, and explicit handler operations on empty buffers
+  {
+    s::buffer<int, 1> empty_a{nullptr, s::range<1>{0}};
+    s::buffer<int, 1> empty_b{s::range<1>{0}};
+    s::buffer<int, 1> result_buf{s::range<1>{3}};
+    int sentinel = 99;
+
+    q.submit([&](s::handler& cgh) {
+      auto empty_acc = empty_a.get_access<s::access::mode::read_write>(cgh);
+      auto res_acc = result_buf.get_access<s::access::mode::discard_write>(cgh);
+      cgh.single_task<class buffer_empty_kernel>([=]() {
+        res_acc[0] = static_cast<int>(empty_acc.size());
+        res_acc[1] = empty_acc.empty() ? 1 : 0;
+        res_acc[2] = (empty_acc.get_pointer().get() == nullptr) ? 1 : 0;
+      });
+    });
+
+    auto res = result_buf.get_host_access();
+    BOOST_CHECK_EQUAL(res[0], 0);
+    BOOST_CHECK_EQUAL(res[1], 1);
+    BOOST_CHECK_EQUAL(res[2], 1);
+
+    q.submit([&](s::handler& cgh) {
+      auto acc = empty_a.get_access<s::access::mode::read_write>(cgh);
+      cgh.parallel_for<class buffer_empty_zero_pf>(
+          empty_a.get_range(), [=](s::id<1> idx) { acc[idx] = 1; });
+    }).wait();
+
+    s::accessor<int, 1, s::access::mode::read_write, s::target::device,
+                s::access::placeholder::true_t>
+        ph_acc{empty_a};
+    q.submit([&](s::handler& cgh) {
+      cgh.require(ph_acc);
+      cgh.single_task<class buffer_empty_placeholder>([=]() { (void)ph_acc.size(); });
+    }).wait();
+
+    q.submit([&](s::handler& cgh) {
+      cgh.fill(empty_a.get_access<s::access::mode::write>(cgh), 123);
+    }).wait();
+    q.submit([&](s::handler& cgh) {
+      cgh.copy(empty_a.get_access<s::access::mode::read>(cgh),
+               empty_b.get_access<s::access::mode::write>(cgh));
+    }).wait();
+    q.submit([&](s::handler& cgh) {
+      cgh.copy(empty_a.get_access<s::access::mode::read>(cgh), &sentinel);
+    }).wait();
+    q.submit([&](s::handler& cgh) {
+      cgh.copy(&sentinel, empty_b.get_access<s::access::mode::write>(cgh));
+    }).wait();
+    q.submit([&](s::handler& cgh) {
+      cgh.update_host(empty_b.get_access<s::access::mode::read>(cgh));
+    }).wait();
+    BOOST_CHECK_EQUAL(sentinel, 99);
+  }
+
+  // Reassigning an empty buffer to a non-empty buffer
+  {
+    s::buffer<int, 1> buf{nullptr, s::range<1>{0}};
+    buf = s::buffer<int, 1>{s::range<1>{4}};
+    BOOST_CHECK_EQUAL(buf.size(), 4);
+    buf.get_host_access()[0] = 10;
+    BOOST_CHECK_EQUAL(buf.get_host_access(s::read_only)[0], 10);
+  }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

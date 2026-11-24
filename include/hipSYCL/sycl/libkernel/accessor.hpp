@@ -655,6 +655,8 @@ template <class T, int Dim>
 rt::range<3> get_effective_range(const std::shared_ptr<rt::buffer_data_region> &mem_region,
                                   const rt::range<Dim> range, const rt::range<Dim> buffer_shape,
                                   const bool has_access_range) {
+  if (range.size() == 0)
+    return rt::embed_in_range3(range);
   // todo: optimize range / offset (would have to calculate a bounding box for reshaped buffers..)
   if(!has_access_range || sizeof(T) != mem_region->get_element_size() 
       || rt::embed_in_range3(buffer_shape) != mem_region->get_num_elements())
@@ -1535,7 +1537,7 @@ private:
           static_cast<rt::buffer_memory_requirement *>(node->get_operation());
       assert(req->has_device_ptr());
       void* host_ptr = req->get_device_ptr();
-      assert(host_ptr);
+      assert(host_ptr || data->is_empty());
       
       // For host accessors, we need to manually trigger the initialization
       // of the embedded pointer

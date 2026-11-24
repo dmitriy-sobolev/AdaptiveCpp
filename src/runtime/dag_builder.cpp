@@ -63,6 +63,11 @@ void add_to_data_users(dag_node_ptr node, memory_requirement *mem_req) {
     // dependencies on conflicting accesses, so we can just
     // replace the tracking of those older accesses with the new one.
     auto replaces_user = [&](const data_user& user) -> bool {
+      // Zero-sized requirements do not conflict with prior users, so they do
+      // not establish a dependency chain that would allow dropping older users.
+      if (mem_req->get_access_range3d().size() == 0)
+        return false;
+
       // Check if accessed range of new user is larger or equal.
       // If its range does not encompass all the range of the existing
       // user, we cannot remove the existing user.

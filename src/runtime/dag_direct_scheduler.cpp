@@ -224,6 +224,18 @@ result submit_requirement(runtime* rt, dag_node_ptr req) {
   if (!req->get_operation()->is_requirement() || req->is_submitted())
     return make_success();
 
+  bool is_empty_buffer = false;
+  execute_if_buffer_requirement(req, [&](buffer_memory_requirement *bmem_req) {
+    if (bmem_req->get_data_region()->is_empty()) {
+      bmem_req->initialize_device_data(nullptr);
+      is_empty_buffer = true;
+    }
+  });
+  if (is_empty_buffer) {
+    req->mark_virtually_submitted();
+    return make_success();
+  }
+
   sycl::access::mode access_mode = sycl::access::mode::read_write;
 
   // Make sure that all required allocations exist
@@ -387,6 +399,14 @@ void dag_direct_scheduler::submit(dag_node_ptr node) {
       return;
     }
   } else {
+    if (node->get_operation()->is_data_transfer() &&
+        cast<memcpy_operation>(node->get_operation())
+                ->get_num_transferred_bytes() == 0) {
+      node->mark_virtually_submitted();
+      node->get_operation()->get_instrumentations().mark_set_complete();
+      return;
+    }
+
     // TODO What if this is an explicit copy between two device backends through
     // host?
     std::pair<backend_executor *, device_id> execution_config =

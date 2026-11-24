@@ -392,10 +392,18 @@ public:
       : _element_size{element_size}, _page_size{page_size},
         _num_elements{num_elements} {
 
-    for(std::size_t i = 0; i < 3; ++i){
-      assert(page_size[i] > 0);
-      _num_pages[i] = (num_elements[i] + page_size[i] - 1) / page_size[i];
-      assert(_num_pages[i] > 0);
+    if (is_empty()) {
+      _num_pages = range<3>{0, 0, 0};
+      for (std::size_t i = 0; i < 3; ++i) {
+        if (_page_size[i] == 0)
+          _page_size[i] = 1;
+      }
+    } else {
+      for(std::size_t i = 0; i < 3; ++i){
+        assert(page_size[i] > 0);
+        _num_pages[i] = (num_elements[i] + page_size[i] - 1) / page_size[i];
+        assert(_num_pages[i] > 0);
+      }
     }
 
     HIPSYCL_DEBUG_INFO << "data_region: constructed with page table dimensions "
@@ -472,6 +480,9 @@ public:
   /// Converts an offset into the data buffer (in element numbers) and the
   /// data length (in element numbers) into an equivalent \c page_range.
   page_range get_page_range(id<3> data_offset, range<3> data_range) const {
+    if (is_empty() || data_range.size() == 0)
+      return std::make_pair(id<3>{0, 0, 0}, range<3>{0, 0, 0});
+
     // Is thread safe without lock because it doesn't modify internal state
     // and doesn't access mutable members.
     id<3> page_begin{0,0,0};
@@ -602,6 +613,8 @@ public:
   std::size_t get_element_size() const { return _element_size; }
 
   range<3> get_num_elements() const { return _num_elements; }
+
+  bool is_empty() const { return _num_elements.size() == 0; }
 
   Memory_descriptor get_memory(device_id dev) const
   {

@@ -79,4 +79,16 @@ BOOST_AUTO_TEST_CASE(page_table) {
   }
 }
 
+BOOST_AUTO_TEST_CASE(zero_sized_data_region) {
+  for (const rt::range<3> &r : {rt::range<3>{1, 1, 0}, rt::range<3>{1, 0, 4},
+                                rt::range<3>{0, 4, 4}, rt::range<3>{0, 0, 0}}) {
+    rt::buffer_data_region region{r, sizeof(int), r};
+    BOOST_CHECK(region.is_empty());
+    BOOST_CHECK(region.get_num_elements() == r);
+    BOOST_CHECK_EQUAL(region.get_element_size(), sizeof(int));
+    BOOST_CHECK_EQUAL(region.get_page_range(rt::id<3>{0, 0, 0}, r).second.size(), 0);
+    BOOST_CHECK(!region.has_initialized_content(rt::id<3>{0, 0, 0}, r));
+  }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

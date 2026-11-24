@@ -179,17 +179,17 @@ struct buffer_impl
   // Only used if a shared_ptr is passed to set_final_data()
   std::shared_ptr<void> writeback_buffer;
   // Only used if writeback is enabled
-  void* writeback_ptr;
+  void* writeback_ptr = nullptr;
   // Only used if a shared_ptr is passed to the buffer constructor
   std::shared_ptr<void> shared_host_data;
   
-  std::size_t write_back_node_group;
+  std::size_t write_back_node_group = std::numeric_limits<std::size_t>::max();
 
   std::shared_ptr<rt::buffer_data_region> data;
 
-  bool writes_back;
-  bool destructor_waits;
-  bool use_external_storage;
+  bool writes_back = false;
+  bool destructor_waits = false;
+  bool use_external_storage = false;
 
   buffer_impl() {
     static std::atomic<bool> was_warning_emitted = false;
@@ -207,7 +207,10 @@ struct buffer_impl
   }
 
   ~buffer_impl() {
-    if (writes_back) {
+    if (!data)
+      return;
+
+    if (writes_back && !data->is_empty()) {
       if (!writeback_ptr) {
         HIPSYCL_DEBUG_WARNING
             << "buffer_impl::~buffer_impl: Writeback was requested but "
@@ -695,16 +698,18 @@ public:
     // Construct buffer
     this->init(range<1>{num_elements});
 
-    // Work around vector<bool> specialization..
-    if constexpr(std::is_same_v<bool, std::remove_const_t<T>>){
-      std::vector<char> contiguous_buffer(num_elements);
-      std::copy(first, last, reinterpret_cast<T*>(&(contiguous_buffer[0])));
-      copy_host_content(reinterpret_cast<T*>(contiguous_buffer.data()));
-    } else {
-      std::vector<T> contiguous_buffer;
-      contiguous_buffer.reserve(num_elements);
-      std::copy(first, last, contiguous_buffer.begin());
-      copy_host_content(contiguous_buffer.data());
+    if (num_elements > 0) {
+      // Work around vector<bool> specialization..
+      if constexpr(std::is_same_v<bool, std::remove_const_t<T>>){
+        std::vector<char> contiguous_buffer(num_elements);
+        std::copy(first, last, reinterpret_cast<T*>(&(contiguous_buffer[0])));
+        copy_host_content(reinterpret_cast<T*>(contiguous_buffer.data()));
+      } else {
+        std::vector<T> contiguous_buffer;
+        contiguous_buffer.reserve(num_elements);
+        std::copy(first, last, contiguous_buffer.begin());
+        copy_host_content(contiguous_buffer.data());
+      }
     }
   }
 
@@ -1130,6 +1135,11 @@ private:
   }
   
   
+  bool is_empty() const noexcept
+  {
+    return size() == 0;
+  }
+
   template <typename Destination = std::nullptr_t>
   void set_write_back_target(Destination finalData = nullptr)
   {
@@ -1145,7 +1155,7 @@ private:
     } else {
       // Assume it is an iterator to contiguous memory
       enable_write_back(true);
-      _impl->writeback_ptr = &(*finalData);
+      _impl->writeback_ptr = !is_empty() ? &(*finalData) : nullptr;
     }
   }
 
@@ -1171,6 +1181,13 @@ private:
   void copy_host_content(const T* data)
   {
     assert(_impl);
+    if (is_empty())
+      return;
+
+    if (!data)
+      throw exception{make_error_code(errc::invalid),
+                      "buffer: Supplied host pointer is null."};
+
     auto host_device = detail::get_host_device();
     preallocate_host_buffer();
 
@@ -1271,21 +1288,22 @@ private:
 
   void init(const range<dimensions>& range)
   {
-    if(range.size() > 0) {
-      this->init_data_backend(range);
+    this->init_data_backend(range);
+    if(!is_empty()) {
       // necessary to preallocate to make sure potential optimized memory
       // can be allocated
       preallocate_host_buffer();
-    } else {
-      sycl::range<dimensions> default_range;
-      for(int i = 0; i < dimensions; ++i)
-        default_range[i] = 1;
-      this->init_data_backend(default_range);
     }
   }
 
   void init(const range<dimensions>& range, T* host_memory)
   {
+    if(range.size() == 0) {
+      this->init_data_backend(range);
+      _impl->writeback_ptr = const_cast<std::remove_const_t<T>*>(host_memory);
+      return;
+    }
+
     if(!host_memory)
       throw exception{make_error_code(errc::invalid),
                       "buffer: Supplied host pointer is null."};

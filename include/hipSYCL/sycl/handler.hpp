@@ -554,10 +554,8 @@ public:
                   "host_image targets are unsupported");
 
 
-    this->submit_kernel<__acpp_unnamed_kernel, rt::kernel_type::basic_parallel_for>(
-        sycl::id<dim>{}, get_range(dest),
-        get_preferred_group_size<dim>(),
-        detail::kernels::fill_kernel{dest, src});
+    this->parallel_for<__acpp_unnamed_kernel>(
+        get_range(dest), detail::kernels::fill_kernel{dest, src});
   }
 
   // ------ USM functions ------
